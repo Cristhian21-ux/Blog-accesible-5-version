@@ -1,0 +1,57 @@
+name: Pruebas y SonarQube Cloud
+
+# Sin acciones de terceros ni instalaciones sin versión fija: cada herramienta se descarga
+# por HTTPS con una versión exacta.
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  PHPUNIT_VERSION: 11.5.57
+  NODE_VERSION: 22.11.0
+  SCANNER_VERSION: 6.2.1.4610
+
+jobs:
+  calidad:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Descargar el código (historial completo)
+        env:
+          TOKEN: ${{ github.token }}
+        run: |
+          git clone "https://x-access-token:${TOKEN}@github.com/${GITHUB_REPOSITORY}.git" .
+          git checkout "${GITHUB_SHA}"
+
+      - name: Descargar herramientas con versión fija
+        run: |
+          mkdir -p "${RUNNER_TEMP}/tools"
+          curl --proto '=https' --tlsv1.2 -fsSL -o "${RUNNER_TEMP}/tools/phpunit.phar" "https://phar.phpunit.de/phpunit-${PHPUNIT_VERSION}.phar"
+          curl --proto '=https' --tlsv1.2 -fsSL "https://nodejs.org/dist/v${NODE_VERSION}/node-v${NODE_VERSION}-linux-x64.tar.xz" | tar -xJ -C "${RUNNER_TEMP}/tools"
+          curl --proto '=https' --tlsv1.2 -fsSL -o "${RUNNER_TEMP}/tools/scanner.zip" "https://binaries.sonarsource.com/Distribution/sonar-scanner-cli/sonar-scanner-cli-${SCANNER_VERSION}-linux-x64.zip"
+          unzip -q "${RUNNER_TEMP}/tools/scanner.zip" -d "${RUNNER_TEMP}/tools"
+
+      - name: Pruebas PHP con cobertura
+        env:
+          XDEBUG_MODE: coverage
+        run: |
+          mkdir -p build/logs
+          php "${RUNNER_TEMP}/tools/phpunit.phar" --coverage-clover build/logs/clover.xml --log-junit build/logs/junit.xml
+
+      - name: Pruebas JavaScript con cobertura
+        run: |
+          "${RUNNER_TEMP}/tools/node-v${NODE_VERSION}-linux-x64/bin/node" --test --experimental-test-coverage --test-reporter=lcov --test-reporter-destination=build/lcov.info tests/js/*.test.js
+
+      - name: Análisis en SonarQube Cloud
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+          PROJECT_KEY: ${{ vars.SONAR_PROJECT_KEY }}
+          ORGANIZATION: ${{ vars.SONAR_ORGANIZATION }}
+        run: |
+          "${RUNNER_TEMP}/tools/sonar-scanner-${SCANNER_VERSION}-linux-x64/bin/sonar-scanner" \
+            -Dsonar.host.url=https://sonarcloud.io \
+            -Dsonar.projectKey="${PROJECT_KEY}" \
+            -Dsonar.organization="${ORGANIZATION}"
